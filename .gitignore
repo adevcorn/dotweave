@@ -1,4 +1,27 @@
+## Build output
 bin/
 obj/
+artifacts/
+
+## IDE / editor
 .vs/
+.idea/
 *.user
+*.suo
+*.DotSettings.user
+
+## NuGet
+*.nupkg
+*.snupkg
+packages/
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Test / benchmark output
+TestResults/
+BenchmarkDotNet.Artifacts/
+
+## Misc
+*.log

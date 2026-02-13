@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <Authors>adevcorn</Authors>
+    <Copyright>Copyright (c) 2026 adevcorn</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/adevcorn/dotweave</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/adevcorn/dotweave</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+</Project>

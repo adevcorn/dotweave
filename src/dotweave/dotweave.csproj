@@ -2,12 +2,11 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
-    <LangVersion>latest</LangVersion>
-    <Nullable>enable</Nullable>
     <IsPackable>true</IsPackable>
     <PackageId>dotweave</PackageId>
     <Version>0.1.0</Version>
-    <Description>Single-package distribution for Traced attribute and interceptor source generator for OpenTelemetry spans.</Description>
+    <Description>Compile-time OpenTelemetry instrumentation for .NET using C# interceptors and source generators.</Description>
+    <PackageTags>opentelemetry;tracing;metrics;source-generator;interceptors;aop;observability</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);PackGeneratorAnalyzer</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
