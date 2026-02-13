@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <PackageId>dotweave</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Single-package distribution for Traced attribute and interceptor source generator for OpenTelemetry spans.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);PackGeneratorAnalyzer</TargetsForTfmSpecificContentInPackage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\dotweave.Attributes\TracedAttribute.cs" Link="TracedAttribute.cs" />
+    <Compile Include="..\dotweave.Attributes\MeasuredAttribute.cs" Link="MeasuredAttribute.cs" />
+    <ProjectReference Include="..\dotweave.Generator\dotweave.Generator.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="build/dotweave.props" Pack="true" PackagePath="build/dotweave.props" />
+    <None Include="buildTransitive/dotweave.props" Pack="true" PackagePath="buildTransitive/dotweave.props" />
+    <None Include="README.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <Target Name="PackGeneratorAnalyzer">
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(MSBuildThisFileDirectory)../dotweave.Generator/bin/$(Configuration)/netstandard2.0/dotweave.Generator.dll"
+                              Condition="Exists('$(MSBuildThisFileDirectory)../dotweave.Generator/bin/$(Configuration)/netstandard2.0/dotweave.Generator.dll')">
+        <PackagePath>analyzers/dotnet/cs</PackagePath>
+      </TfmSpecificPackageFile>
+    </ItemGroup>
+  </Target>
+
+</Project>

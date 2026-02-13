@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/HelloWorld.Api/HelloWorld.Api.csproj" />
+    <Project Path="src/dotweave/dotweave.csproj" />
+    <Project Path="src/dotweave.Attributes/dotweave.Attributes.csproj" />
+    <Project Path="src/dotweave.Generator/dotweave.Generator.csproj" />
+  </Folder>
+</Solution>
