@@ -115,3 +115,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.NEXT_TAG }}
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: ./artifacts/*.nupkg
+
+      - name: Push to NuGet
+        if: steps.version.outputs.SKIP == 'false'
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
