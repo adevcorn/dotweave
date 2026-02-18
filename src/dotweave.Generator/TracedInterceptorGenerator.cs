@@ -26,36 +26,38 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor UnsupportedRefStructParam = new(
         id: "OTEL002",
         title: "Methods with ref struct parameters are not supported by dotweave interceptors",
-        messageFormat: "Method '{0}' has a ref struct parameter and cannot be intercepted by async dotweave. Remove [Traced]/[Measured] or avoid ref struct parameters on async methods.",
+        messageFormat: "Method '{0}' has a ref struct parameter '{1}' and cannot be intercepted by dotweave async wrappers. Remove [Traced]/[Measured] or avoid ref struct parameters on async methods.",
         category: "dotweave",
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        // Phase 1: Collect the set of method symbols that carry [Traced] or [Measured].
+        // Phase 1: Collect the set of method names that carry [Traced] or [Measured].
         // ForAttributeWithMetadataName is far cheaper than scanning every invocation.
-        var tracedMethods = context.SyntaxProvider.ForAttributeWithMetadataName(
+        // We collect just the method names for a syntactic pre-filter on invocations.
+        var tracedMethodNames = context.SyntaxProvider.ForAttributeWithMetadataName(
             TracedAttributeFqn,
             predicate: static (node, _) => node is MethodDeclarationSyntax,
-            transform: static (ctx, _) => GetMethodSymbolKey(ctx))
+            transform: static (ctx, _) => GetMethodName(ctx))
             .Where(static k => k is not null)
             .Select(static (k, _) => k!);
 
-        var measuredMethods = context.SyntaxProvider.ForAttributeWithMetadataName(
+        var measuredMethodNames = context.SyntaxProvider.ForAttributeWithMetadataName(
             MeasuredAttributeFqn,
             predicate: static (node, _) => node is MethodDeclarationSyntax,
-            transform: static (ctx, _) => GetMethodSymbolKey(ctx))
+            transform: static (ctx, _) => GetMethodName(ctx))
             .Where(static k => k is not null)
             .Select(static (k, _) => k!);
 
-        var attributedMethodKeys = tracedMethods.Collect()
-            .Combine(measuredMethods.Collect())
+        var attributedMethodNames = tracedMethodNames.Collect()
+            .Combine(measuredMethodNames.Collect())
             .Select(static (pair, _) =>
                 pair.Left.Concat(pair.Right).ToImmutableHashSet());
 
-        // Phase 2: Scan invocations, but only resolve symbols for calls whose
-        // member name matches an attributed method name (cheap syntactic filter).
+        // Phase 2: Scan invocations, using the attributed method names as a
+        // cheap syntactic pre-filter so we only call GetSymbolInfo on calls
+        // whose method name matches an attributed method.
         var invocations = context.SyntaxProvider.CreateSyntaxProvider(
             predicate: static (node, _) =>
             {
@@ -69,14 +71,25 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
             .Where(static c => c is not null)
             .Select(static (c, _) => c!.Value);
 
-        var collected = invocations.Collect();
+        // Combine invocations with attributed method names to filter out
+        // invocations that don't target an attributed method name.
+        var filteredInvocations = invocations.Collect()
+            .Combine(attributedMethodNames)
+            .Select(static (pair, _) =>
+            {
+                var candidates = pair.Left;
+                var methodNames = pair.Right;
+                return candidates
+                    .Where(c => methodNames.Contains(c.MethodName))
+                    .ToImmutableArray();
+            });
 
-        context.RegisterSourceOutput(collected, static (spc, candidates) =>
+        context.RegisterSourceOutput(filteredInvocations, static (spc, candidates) =>
         {
             if (candidates.IsEmpty)
                 return;
 
-            // Report diagnostics for generic methods
+            // Report diagnostics and filter out unsupported methods
             var valid = new List<InvocationInfo>();
             foreach (var c in candidates)
             {
@@ -92,6 +105,22 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
                         c.MethodName));
                     continue;
                 }
+
+                // Report OTEL002 for async methods with ref struct parameters
+                if (c.IsAsync && c.HasRefStructParam)
+                {
+                    var refStructParamName = c.Parameters.First(p => p.IsRefStruct).Name;
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        UnsupportedRefStructParam,
+                        Location.Create(c.FilePath,
+                            default,
+                            new Microsoft.CodeAnalysis.Text.LinePositionSpan(
+                                new Microsoft.CodeAnalysis.Text.LinePosition(c.Line - 1, c.Column - 1),
+                                new Microsoft.CodeAnalysis.Text.LinePosition(c.Line - 1, c.Column - 1))),
+                        c.MethodName, refStructParamName));
+                    continue;
+                }
+
                 valid.Add(c);
             }
 
@@ -109,10 +138,13 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
         });
     }
 
-    private static string? GetMethodSymbolKey(GeneratorAttributeSyntaxContext ctx)
+    /// <summary>
+    /// Extracts just the method name for the syntactic pre-filter.
+    /// </summary>
+    private static string? GetMethodName(GeneratorAttributeSyntaxContext ctx)
     {
         if (ctx.TargetSymbol is IMethodSymbol method)
-            return $"{method.ContainingType.ToDisplayString()}.{method.Name}";
+            return method.Name;
         return null;
     }
 
@@ -193,6 +225,28 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
             }
         }
 
+        // Detect async return type using the semantic model (OriginalDefinition)
+        // instead of fragile string matching.
+        var isAsync = IsAsyncReturn(method);
+        var isValueTask = IsValueTaskReturn(method);
+
+        // Detect the inner return type for generic Task<T>/ValueTask<T> using the
+        // semantic model, avoiding fragile EndsWith("Task") string checks.
+        var hasReturnValue = false;
+        string? innerReturnType = null;
+        if (isAsync)
+        {
+            var namedReturnType = method.ReturnType as INamedTypeSymbol;
+            if (namedReturnType is { IsGenericType: true, TypeArguments.Length: 1 })
+            {
+                hasReturnValue = true;
+                innerReturnType = namedReturnType.TypeArguments[0].ToDisplayString();
+            }
+        }
+
+        // Detect ref struct parameters
+        bool hasRefStructParam = method.Parameters.Any(p => p.Type.IsRefLikeType);
+
         return new InvocationInfo
         {
             MethodName = method.Name,
@@ -205,10 +259,13 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
             Column = lineSpan.StartLinePosition.Character + 1,
             ReturnType = method.ReturnType.ToDisplayString(),
             ReturnsVoid = method.ReturnsVoid,
-            IsAsync = IsAsyncReturn(method),
-            IsValueTask = IsValueTaskReturn(method),
+            IsAsync = isAsync,
+            IsValueTask = isValueTask,
+            HasAsyncReturnValue = hasReturnValue,
+            InnerReturnType = innerReturnType,
             IsStatic = method.IsStatic,
             IsGenericMethod = method.IsGenericMethod,
+            HasRefStructParam = hasRefStructParam,
             EmitTracing = tracedAttr is not null,
             EmitMetrics = measuredAttr is not null,
             EmitCalls = emitCalls,
@@ -219,10 +276,55 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
             {
                 Name = p.Name,
                 Type = p.Type.ToDisplayString(),
-                RefKind = p.RefKind
+                RefKind = p.RefKind,
+                IsParams = p.IsParams,
+                HasDefaultValue = p.HasExplicitDefaultValue,
+                DefaultValueExpression = p.HasExplicitDefaultValue ? FormatDefaultValue(p) : null,
+                IsRefStruct = p.Type.IsRefLikeType
             }).ToImmutableArray(),
             InstanceType = method.IsStatic ? null : method.ContainingType.ToDisplayString(),
         };
+    }
+
+    /// <summary>
+    /// Formats the default value of an optional parameter as a C# expression string.
+    /// </summary>
+    private static string FormatDefaultValue(IParameterSymbol p)
+    {
+        if (!p.HasExplicitDefaultValue)
+            return "default";
+
+        var value = p.ExplicitDefaultValue;
+
+        if (value is null)
+            return "default";
+
+        if (value is string strVal)
+            return $"\"{strVal.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
+
+        if (value is char charVal)
+            return $"'{charVal}'";
+
+        if (value is bool boolVal)
+            return boolVal ? "true" : "false";
+
+        if (value is float floatVal)
+            return floatVal.ToString("R") + "f";
+
+        if (value is double doubleVal)
+            return doubleVal.ToString("R") + "d";
+
+        if (value is decimal decimalVal)
+            return decimalVal.ToString() + "m";
+
+        if (value is long longVal)
+            return longVal.ToString() + "L";
+
+        if (value is ulong ulongVal)
+            return ulongVal.ToString() + "UL";
+
+        // int, short, byte, etc. -- ToString() is sufficient
+        return value.ToString();
     }
 
     private static bool IsAsyncReturn(IMethodSymbol method)
@@ -258,8 +360,14 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
     public bool ReturnsVoid { get; set; }
     public bool IsAsync { get; set; }
     public bool IsValueTask { get; set; }
+    /// <summary>Whether the async return type is generic (e.g. Task&lt;T&gt; vs Task).</summary>
+    public bool HasAsyncReturnValue { get; set; }
+    /// <summary>The inner type argument of Task&lt;T&gt;/ValueTask&lt;T&gt;, or null for non-generic.</summary>
+    public string? InnerReturnType { get; set; }
     public bool IsStatic { get; set; }
     public bool IsGenericMethod { get; set; }
+    /// <summary>Whether any parameter is a ref struct (Span, ReadOnlySpan, etc.).</summary>
+    public bool HasRefStructParam { get; set; }
     public bool EmitTracing { get; set; }
     public bool EmitMetrics { get; set; }
     public bool EmitCalls { get; set; }
@@ -282,8 +390,11 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
         ReturnsVoid == other.ReturnsVoid &&
         IsAsync == other.IsAsync &&
         IsValueTask == other.IsValueTask &&
+        HasAsyncReturnValue == other.HasAsyncReturnValue &&
+        InnerReturnType == other.InnerReturnType &&
         IsStatic == other.IsStatic &&
         IsGenericMethod == other.IsGenericMethod &&
+        HasRefStructParam == other.HasRefStructParam &&
         EmitTracing == other.EmitTracing &&
         EmitMetrics == other.EmitMetrics &&
         EmitCalls == other.EmitCalls &&
@@ -304,6 +415,24 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
             hash = hash * 31 + Line;
             hash = hash * 31 + Column;
             hash = hash * 31 + (MethodName?.GetHashCode() ?? 0);
+            hash = hash * 31 + (ContainingType?.GetHashCode() ?? 0);
+            hash = hash * 31 + (SpanName?.GetHashCode() ?? 0);
+            hash = hash * 31 + (MetricName?.GetHashCode() ?? 0);
+            hash = hash * 31 + (ReturnType?.GetHashCode() ?? 0);
+            hash = hash * 31 + ReturnsVoid.GetHashCode();
+            hash = hash * 31 + IsAsync.GetHashCode();
+            hash = hash * 31 + IsValueTask.GetHashCode();
+            hash = hash * 31 + HasAsyncReturnValue.GetHashCode();
+            hash = hash * 31 + (InnerReturnType?.GetHashCode() ?? 0);
+            hash = hash * 31 + IsStatic.GetHashCode();
+            hash = hash * 31 + IsGenericMethod.GetHashCode();
+            hash = hash * 31 + HasRefStructParam.GetHashCode();
+            hash = hash * 31 + EmitTracing.GetHashCode();
+            hash = hash * 31 + EmitMetrics.GetHashCode();
+            hash = hash * 31 + EmitCalls.GetHashCode();
+            hash = hash * 31 + EmitDuration.GetHashCode();
+            hash = hash * 31 + EmitInFlight.GetHashCode();
+            hash = hash * 31 + (InstanceType?.GetHashCode() ?? 0);
             return hash;
         }
     }
@@ -314,11 +443,23 @@ internal struct ParamInfo : IEquatable<ParamInfo>
     public string Name { get; set; }
     public string Type { get; set; }
     public RefKind RefKind { get; set; }
+    /// <summary>Whether the parameter uses the params modifier.</summary>
+    public bool IsParams { get; set; }
+    /// <summary>Whether the parameter has a default value.</summary>
+    public bool HasDefaultValue { get; set; }
+    /// <summary>The default value expression as a C# string, or null.</summary>
+    public string? DefaultValueExpression { get; set; }
+    /// <summary>Whether the parameter type is a ref struct.</summary>
+    public bool IsRefStruct { get; set; }
 
     public bool Equals(ParamInfo other) =>
         Name == other.Name &&
         Type == other.Type &&
-        RefKind == other.RefKind;
+        RefKind == other.RefKind &&
+        IsParams == other.IsParams &&
+        HasDefaultValue == other.HasDefaultValue &&
+        DefaultValueExpression == other.DefaultValueExpression &&
+        IsRefStruct == other.IsRefStruct;
 
     public override bool Equals(object? obj) => obj is ParamInfo other && Equals(other);
 
@@ -330,6 +471,10 @@ internal struct ParamInfo : IEquatable<ParamInfo>
             hash = hash * 31 + (Name?.GetHashCode() ?? 0);
             hash = hash * 31 + (Type?.GetHashCode() ?? 0);
             hash = hash * 31 + (int)RefKind;
+            hash = hash * 31 + IsParams.GetHashCode();
+            hash = hash * 31 + HasDefaultValue.GetHashCode();
+            hash = hash * 31 + (DefaultValueExpression?.GetHashCode() ?? 0);
+            hash = hash * 31 + IsRefStruct.GetHashCode();
             return hash;
         }
     }
