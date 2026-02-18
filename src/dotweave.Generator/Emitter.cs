@@ -142,7 +142,8 @@ internal static class Emitter
 
     /// <summary>
     /// Produces a safe C# identifier suffix from a metric name.
-    /// Replaces non-alphanumeric characters with underscores.
+    /// Replaces non-alphanumeric characters with underscores and prepends
+    /// an underscore if the result starts with a digit.
     /// </summary>
     private static string MetricFieldSuffix(string metricName)
     {
@@ -151,6 +152,9 @@ internal static class Emitter
         {
             sb.Append(char.IsLetterOrDigit(ch) ? ch : '_');
         }
+        // Ensure the suffix doesn't start with a digit (invalid C# identifier)
+        if (sb.Length > 0 && char.IsDigit(sb[0]))
+            sb.Insert(0, '_');
         return sb.ToString();
     }
 
@@ -234,8 +238,11 @@ internal static class Emitter
                 RefKind.Ref => "ref ",
                 RefKind.Out => "out ",
                 RefKind.In => "in ",
+                RefKind.RefReadOnlyParameter => "ref readonly ",
                 _ => ""
             };
+
+            var paramsMod = p.IsParams ? "params " : "";
 
             if (i > 0)
             {
@@ -244,7 +251,8 @@ internal static class Emitter
             }
 
             var safeName = SafeName(p.Name);
-            paramList.Append($"{refMod}{p.Type} {safeName}");
+            var defaultSuffix = p.HasDefaultValue ? $" = {p.DefaultValueExpression}" : "";
+            paramList.Append($"{paramsMod}{refMod}{p.Type} {safeName}{defaultSuffix}");
             argList.Append($"{refMod}{safeName}");
         }
 
@@ -273,7 +281,7 @@ internal static class Emitter
         string callTarget,
         string spanName)
     {
-        var hasReturnValue = !c.ReturnType.EndsWith("Task");
+        var hasReturnValue = c.HasAsyncReturnValue;
 
         sb.AppendLine($"        public static async {c.ReturnType} Intercepted_{c.MethodName}_{index}({paramList})");
         sb.AppendLine("        {");
@@ -293,7 +301,9 @@ internal static class Emitter
             EmitMetricsOnSuccess(sb, c);
         }
 
+        sb.AppendLine("            }");
         EmitCatchBlock(sb, c);
+        EmitFinallyBlock(sb, c);
         sb.AppendLine("        }");
     }
 
@@ -310,7 +320,7 @@ internal static class Emitter
         string callTarget,
         string spanName)
     {
-        var hasReturnValue = !c.ReturnType.EndsWith("ValueTask");
+        var hasReturnValue = c.HasAsyncReturnValue;
         var fieldSuffix = MetricFieldSuffix(c.MetricName);
 
         // The outer method: checks synchronous completion, delegates to slow path if needed.
@@ -394,8 +404,9 @@ internal static class Emitter
         if (c.EmitMetrics && c.EmitDuration)
             slowParams.Append(", long __startTimestamp");
 
+        var innerReturnType = c.InnerReturnType ?? "object";
         var returnType = hasReturnValue
-            ? $"async System.Threading.Tasks.Task<{ExtractGenericArg(c.ReturnType)}>"
+            ? $"async System.Threading.Tasks.Task<{innerReturnType}>"
             : "async System.Threading.Tasks.Task";
 
         sb.AppendLine($"        private static {returnType} AwaitSlowPath_{index}({slowParams})");
@@ -433,18 +444,6 @@ internal static class Emitter
         sb.AppendLine("        }");
     }
 
-    /// <summary>
-    /// Extracts the generic type argument from e.g. "System.Threading.Tasks.ValueTask&lt;string&gt;".
-    /// </summary>
-    private static string ExtractGenericArg(string returnType)
-    {
-        var start = returnType.IndexOf('<');
-        var end = returnType.LastIndexOf('>');
-        if (start >= 0 && end > start)
-            return returnType.Substring(start + 1, end - start - 1);
-        return "object";
-    }
-
     private static void EmitVoidMethod(
         StringBuilder sb,
         InvocationInfo c,
@@ -461,7 +460,9 @@ internal static class Emitter
         sb.AppendLine("            {");
         sb.AppendLine($"                {callTarget}.{c.MethodName}({argList});");
         EmitMetricsOnSuccess(sb, c);
+        sb.AppendLine("            }");
         EmitCatchBlock(sb, c);
+        EmitFinallyBlock(sb, c);
         sb.AppendLine("        }");
     }
 
@@ -482,7 +483,9 @@ internal static class Emitter
         sb.AppendLine($"                var __result = {callTarget}.{c.MethodName}({argList});");
         EmitMetricsOnSuccess(sb, c);
         sb.AppendLine("                return __result;");
+        sb.AppendLine("            }");
         EmitCatchBlock(sb, c);
+        EmitFinallyBlock(sb, c);
         sb.AppendLine("        }");
     }
 
@@ -528,6 +531,7 @@ internal static class Emitter
     /// <summary>
     /// Emits metric recording for the success path. Used by both the main method helpers
     /// and the ValueTask inline paths.
+    /// Does NOT emit InFlight decrement -- that belongs in the finally block.
     /// </summary>
     private static void EmitInlineMetricsSuccess(StringBuilder sb, InvocationInfo c, string fieldSuffix)
     {
@@ -539,12 +543,11 @@ internal static class Emitter
             sb.AppendLine($"                Calls_{fieldSuffix}.Add(1, {okTags});");
         if (c.EmitDuration)
             sb.AppendLine($"                DurationMs_{fieldSuffix}.Record(GetElapsedMs(__startTimestamp), {okTags});");
-        if (c.EmitInFlight)
-            sb.AppendLine($"                InFlight_{fieldSuffix}.Add(-1{BuildCustomTagArgs(c)});");
     }
 
     /// <summary>
     /// Emits metric recording for the error path.
+    /// Does NOT emit InFlight decrement -- that belongs in the finally block.
     /// </summary>
     private static void EmitInlineMetricsError(StringBuilder sb, InvocationInfo c, string fieldSuffix)
     {
@@ -556,8 +559,6 @@ internal static class Emitter
             sb.AppendLine($"                Calls_{fieldSuffix}.Add(1, {errorTags});");
         if (c.EmitDuration)
             sb.AppendLine($"                DurationMs_{fieldSuffix}.Record(GetElapsedMs(__startTimestamp), {errorTags});");
-        if (c.EmitInFlight)
-            sb.AppendLine($"                InFlight_{fieldSuffix}.Add(-1{BuildCustomTagArgs(c)});");
     }
 
     private static void EmitTracingError(StringBuilder sb, string activityVar)
@@ -574,7 +575,6 @@ internal static class Emitter
 
     private static void EmitCatchBlock(StringBuilder sb, InvocationInfo c)
     {
-        sb.AppendLine("            }");
         sb.AppendLine("            catch (System.Exception __ex)");
         sb.AppendLine("            {");
 
@@ -586,6 +586,23 @@ internal static class Emitter
         EmitMetricsOnError(sb, c);
 
         sb.AppendLine("                throw;");
+        sb.AppendLine("            }");
+    }
+
+    /// <summary>
+    /// Emits a finally block that decrements the InFlight counter.
+    /// This ensures the counter is always decremented, even if metrics
+    /// recording in the success/error paths throws.
+    /// </summary>
+    private static void EmitFinallyBlock(StringBuilder sb, InvocationInfo c)
+    {
+        if (!c.EmitMetrics || !c.EmitInFlight)
+            return;
+
+        var fieldSuffix = MetricFieldSuffix(c.MetricName);
+        sb.AppendLine("            finally");
+        sb.AppendLine("            {");
+        sb.AppendLine($"                InFlight_{fieldSuffix}.Add(-1{BuildCustomTagArgs(c)});");
         sb.AppendLine("            }");
     }
 }
