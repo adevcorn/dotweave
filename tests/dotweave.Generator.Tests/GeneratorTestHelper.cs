@@ -35,6 +35,7 @@ public static class GeneratorTestHelper
             public bool Duration { get; set; } = true;
             public bool InFlight { get; set; } = false;
             public string[]? Tags { get; set; }
+            public string? ErrorWhen { get; set; }
             public MeasuredAttribute() { }
             public MeasuredAttribute(string metricName) { MetricName = metricName; }
         }

@@ -36,6 +36,16 @@ public sealed class MeasuredAttribute : Attribute
     /// </summary>
     public string[]? Tags { get; set; }
 
+    /// <summary>
+    /// Name of a static method that accepts the return value and returns bool.
+    /// When set, the generator calls this predicate to determine whether the
+    /// result is an error (true → status="error", false → status="ok").
+    /// Exceptions still always record status="error" regardless of this setting.
+    /// The predicate must be a static method on the same class as the attributed method.
+    /// Example: ErrorWhen = nameof(IsFailure)
+    /// </summary>
+    public string? ErrorWhen { get; set; }
+
     public MeasuredAttribute() { }
 
     public MeasuredAttribute(string metricName)

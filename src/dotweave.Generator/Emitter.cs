@@ -292,13 +292,13 @@ internal static class Emitter
         if (hasReturnValue)
         {
             sb.AppendLine($"                var __result = await {callTarget}.{c.MethodName}({argList});");
-            EmitMetricsOnSuccess(sb, c);
+            EmitMetricsOnSuccess(sb, c, "__result");
             sb.AppendLine("                return __result;");
         }
         else
         {
             sb.AppendLine($"                await {callTarget}.{c.MethodName}({argList});");
-            EmitMetricsOnSuccess(sb, c);
+            EmitMetricsOnSuccess(sb, c, null);
         }
 
         sb.AppendLine("            }");
@@ -347,7 +347,7 @@ internal static class Emitter
         sb.AppendLine("                {");
 
         // Fast path: synchronous completion -- no state machine allocation.
-        EmitInlineMetricsSuccess(sb, c, fieldSuffix);
+        EmitInlineMetricsSuccess(sb, c, fieldSuffix, hasReturnValue ? "__task.Result" : null);
         if (c.EmitTracing)
         {
             sb.AppendLine("                    __activity?.Dispose();");
@@ -417,13 +417,13 @@ internal static class Emitter
         if (hasReturnValue)
         {
             sb.AppendLine("                var __result = await __task;");
-            EmitInlineMetricsSuccess(sb, c, fieldSuffix);
+            EmitInlineMetricsSuccess(sb, c, fieldSuffix, "__result");
             sb.AppendLine("                return __result;");
         }
         else
         {
             sb.AppendLine("                await __task;");
-            EmitInlineMetricsSuccess(sb, c, fieldSuffix);
+            EmitInlineMetricsSuccess(sb, c, fieldSuffix, null);
         }
 
         sb.AppendLine("            }");
@@ -459,7 +459,7 @@ internal static class Emitter
         sb.AppendLine("            try");
         sb.AppendLine("            {");
         sb.AppendLine($"                {callTarget}.{c.MethodName}({argList});");
-        EmitMetricsOnSuccess(sb, c);
+        EmitMetricsOnSuccess(sb, c, null);
         sb.AppendLine("            }");
         EmitCatchBlock(sb, c);
         EmitFinallyBlock(sb, c);
@@ -510,13 +510,13 @@ internal static class Emitter
         }
     }
 
-    private static void EmitMetricsOnSuccess(StringBuilder sb, InvocationInfo c)
+    private static void EmitMetricsOnSuccess(StringBuilder sb, InvocationInfo c, string? resultExpr = "__result")
     {
         if (!c.EmitMetrics)
             return;
 
         var fieldSuffix = MetricFieldSuffix(c.MetricName);
-        EmitInlineMetricsSuccess(sb, c, fieldSuffix);
+        EmitInlineMetricsSuccess(sb, c, fieldSuffix, resultExpr);
     }
 
     private static void EmitMetricsOnError(StringBuilder sb, InvocationInfo c)
@@ -532,17 +532,48 @@ internal static class Emitter
     /// Emits metric recording for the success path. Used by both the main method helpers
     /// and the ValueTask inline paths.
     /// Does NOT emit InFlight decrement -- that belongs in the finally block.
+    /// When <see cref="InvocationInfo.ErrorWhenPredicate"/> is set and a result variable
+    /// is available, the generated code calls the predicate to determine status.
+    /// When the predicate detects an error and tracing is enabled, the span is also
+    /// marked with <c>ActivityStatusCode.Error</c>.
     /// </summary>
-    private static void EmitInlineMetricsSuccess(StringBuilder sb, InvocationInfo c, string fieldSuffix)
+    private static void EmitInlineMetricsSuccess(StringBuilder sb, InvocationInfo c, string fieldSuffix, string? resultExpr = "__result")
     {
         if (!c.EmitMetrics)
             return;
 
-        var okTags = BuildTagArgs(c, "ok");
-        if (c.EmitCalls)
-            sb.AppendLine($"                Calls_{fieldSuffix}.Add(1, {okTags});");
-        if (c.EmitDuration)
-            sb.AppendLine($"                DurationMs_{fieldSuffix}.Record(GetElapsedMs(__startTimestamp), {okTags});");
+        if (c.ErrorWhenPredicate is not null && resultExpr is not null)
+        {
+            // Predicate-based status: call the user's static bool method
+            var okTags = BuildTagArgs(c, "ok");
+            var errorTags = BuildTagArgs(c, "error");
+            sb.AppendLine($"                if ({c.ErrorWhenPredicate}({resultExpr}))");
+            sb.AppendLine("                {");
+            if (c.EmitTracing)
+            {
+                sb.AppendLine("                    __activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, \"ErrorWhen predicate returned true\");");
+            }
+            if (c.EmitCalls)
+                sb.AppendLine($"                    Calls_{fieldSuffix}.Add(1, {errorTags});");
+            if (c.EmitDuration)
+                sb.AppendLine($"                    DurationMs_{fieldSuffix}.Record(GetElapsedMs(__startTimestamp), {errorTags});");
+            sb.AppendLine("                }");
+            sb.AppendLine("                else");
+            sb.AppendLine("                {");
+            if (c.EmitCalls)
+                sb.AppendLine($"                    Calls_{fieldSuffix}.Add(1, {okTags});");
+            if (c.EmitDuration)
+                sb.AppendLine($"                    DurationMs_{fieldSuffix}.Record(GetElapsedMs(__startTimestamp), {okTags});");
+            sb.AppendLine("                }");
+        }
+        else
+        {
+            var okTags = BuildTagArgs(c, "ok");
+            if (c.EmitCalls)
+                sb.AppendLine($"                Calls_{fieldSuffix}.Add(1, {okTags});");
+            if (c.EmitDuration)
+                sb.AppendLine($"                DurationMs_{fieldSuffix}.Record(GetElapsedMs(__startTimestamp), {okTags});");
+        }
     }
 
     /// <summary>

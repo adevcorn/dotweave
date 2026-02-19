@@ -31,6 +31,14 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor InvalidErrorWhenPredicate = new(
+        id: "OTEL003",
+        title: "ErrorWhen predicate method not found or invalid",
+        messageFormat: "ErrorWhen predicate '{0}' on method '{1}' was not resolved. The predicate must be a static method on the same type that returns bool and accepts a single parameter matching the method's return type.",
+        category: "dotweave",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // Phase 1: Collect the set of method names that carry [Traced] or [Measured].
@@ -121,6 +129,20 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
                     continue;
                 }
 
+                // Report OTEL003 when ErrorWhen was specified but the predicate could not be resolved
+                if (c.ErrorWhenMethodName is not null && c.ErrorWhenPredicate is null)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        InvalidErrorWhenPredicate,
+                        Location.Create(c.FilePath,
+                            default,
+                            new Microsoft.CodeAnalysis.Text.LinePositionSpan(
+                                new Microsoft.CodeAnalysis.Text.LinePosition(c.Line - 1, c.Column - 1),
+                                new Microsoft.CodeAnalysis.Text.LinePosition(c.Line - 1, c.Column - 1))),
+                        c.ErrorWhenMethodName, c.MethodName));
+                    // Don't skip the method — it still compiles, just falls back to default status="ok"
+                }
+
                 valid.Add(c);
             }
 
@@ -186,6 +208,8 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
         bool emitCalls = true;
         bool emitDuration = true;
         bool emitInFlight = false;
+        string? errorWhenPredicate = null;
+        string? errorWhenMethodName = null;
         ImmutableArray<string> customTags = ImmutableArray<string>.Empty;
 
         if (measuredAttr is not null)
@@ -210,6 +234,45 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
                         break;
                     case "InFlight" when named.Value.Value is bool bInFlight:
                         emitInFlight = bInFlight;
+                        break;
+                    case "ErrorWhen" when named.Value.Value is string errorWhenName:
+                        // Determine the effective return type that the predicate must accept.
+                        // For Task<T>/ValueTask<T>, the predicate inspects T, not the wrapper.
+                        ITypeSymbol? effectiveReturnType = null;
+                        if (method.ReturnsVoid)
+                        {
+                            // Void methods have no result to inspect — cannot use ErrorWhen.
+                        }
+                        else if (IsAsyncReturn(method))
+                        {
+                            var namedRt = method.ReturnType as INamedTypeSymbol;
+                            if (namedRt is { IsGenericType: true, TypeArguments.Length: 1 })
+                                effectiveReturnType = namedRt.TypeArguments[0];
+                            // else plain Task/ValueTask — no result to inspect
+                        }
+                        else
+                        {
+                            effectiveReturnType = method.ReturnType;
+                        }
+
+                        if (effectiveReturnType is not null)
+                        {
+                            // Resolve the predicate method on the containing type.
+                            // Must be static, return bool, accept exactly one parameter
+                            // whose type matches the method's effective return type.
+                            var predicateMethod = method.ContainingType.GetMembers(errorWhenName)
+                                .OfType<IMethodSymbol>()
+                                .FirstOrDefault(m =>
+                                    m.IsStatic &&
+                                    m.ReturnType.SpecialType == SpecialType.System_Boolean &&
+                                    m.Parameters.Length == 1 &&
+                                    SymbolEqualityComparer.Default.Equals(m.Parameters[0].Type, effectiveReturnType));
+                            if (predicateMethod is not null)
+                            {
+                                errorWhenPredicate = $"{method.ContainingType.ToDisplayString()}.{errorWhenName}";
+                            }
+                        }
+                        errorWhenMethodName = errorWhenName;
                         break;
                     case "Tags" when !named.Value.IsNull:
                         var tagValues = named.Value.Values;
@@ -271,6 +334,8 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
             EmitCalls = emitCalls,
             EmitDuration = emitDuration,
             EmitInFlight = emitInFlight,
+            ErrorWhenPredicate = errorWhenPredicate,
+            ErrorWhenMethodName = errorWhenMethodName,
             CustomTags = customTags,
             Parameters = method.Parameters.Select(p => new ParamInfo
             {
@@ -373,6 +438,17 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
     public bool EmitCalls { get; set; }
     public bool EmitDuration { get; set; }
     public bool EmitInFlight { get; set; }
+    /// <summary>
+    /// The fully-qualified call expression for the ErrorWhen predicate, e.g. "Svc.IsFailure".
+    /// Null when no predicate is configured.
+    /// </summary>
+    public string? ErrorWhenPredicate { get; set; }
+    /// <summary>
+    /// The raw ErrorWhen method name as specified in the attribute.
+    /// Stored so the output phase can report OTEL003 when ErrorWhenPredicate is null
+    /// but this is non-null (meaning the predicate was requested but not resolved).
+    /// </summary>
+    public string? ErrorWhenMethodName { get; set; }
     public ImmutableArray<string> CustomTags { get; set; }
     public ImmutableArray<ParamInfo> Parameters { get; set; }
     public string? InstanceType { get; set; }
@@ -400,6 +476,8 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
         EmitCalls == other.EmitCalls &&
         EmitDuration == other.EmitDuration &&
         EmitInFlight == other.EmitInFlight &&
+        ErrorWhenPredicate == other.ErrorWhenPredicate &&
+        ErrorWhenMethodName == other.ErrorWhenMethodName &&
         CustomTags.SequenceEqual(other.CustomTags) &&
         Parameters.SequenceEqual(other.Parameters) &&
         InstanceType == other.InstanceType;
@@ -432,6 +510,8 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
             hash = hash * 31 + EmitCalls.GetHashCode();
             hash = hash * 31 + EmitDuration.GetHashCode();
             hash = hash * 31 + EmitInFlight.GetHashCode();
+            hash = hash * 31 + (ErrorWhenPredicate?.GetHashCode() ?? 0);
+            hash = hash * 31 + (ErrorWhenMethodName?.GetHashCode() ?? 0);
             hash = hash * 31 + (InstanceType?.GetHashCode() ?? 0);
             return hash;
         }
