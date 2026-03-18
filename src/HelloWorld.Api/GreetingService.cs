@@ -1,5 +1,15 @@
 using dotweave;
 
+public static class StaticGreetingService
+{
+    [Traced]
+    [Measured]
+    public static string GetStaticGreeting(string name)
+    {
+        return $"Hello from static method, {name}!";
+    }
+}
+
 public class GreetingService
 {
     private readonly ILogger<GreetingService> _logger;
