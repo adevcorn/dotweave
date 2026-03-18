@@ -178,9 +178,14 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
         if (symbolInfo.Symbol is not IMethodSymbol method)
             return null;
 
-        var tracedAttr = method.GetAttributes().FirstOrDefault(a =>
+        // For extension methods called via instance syntax ("hello".Foo()), Roslyn returns the
+        // reduced form of the IMethodSymbol, which does NOT carry attributes. The attributes
+        // live on the original static definition, accessible via ReducedFrom.
+        var attributeSource = method.ReducedFrom ?? method;
+
+        var tracedAttr = attributeSource.GetAttributes().FirstOrDefault(a =>
             a.AttributeClass?.ToDisplayString() == TracedAttributeFqn);
-        var measuredAttr = method.GetAttributes().FirstOrDefault(a =>
+        var measuredAttr = attributeSource.GetAttributes().FirstOrDefault(a =>
             a.AttributeClass?.ToDisplayString() == MeasuredAttributeFqn);
 
         if (tracedAttr is null && measuredAttr is null)
@@ -307,8 +312,24 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
             }
         }
 
-        // Detect ref struct parameters
+        // For extension methods called via instance syntax ("hello".Foo()), Roslyn returns the
+        // REDUCED form of IMethodSymbol where IsStatic=false and method.Parameters does NOT
+        // include the receiver ('this') parameter — Roslyn strips it. The receiver type is
+        // available via method.ReceiverType. Using method.ContainingType as the 'this' parameter
+        // type would be a static class → CS0721.
+        var isExtensionMethod = method.IsExtensionMethod;
+
+        // The reduced form already has the receiver stripped from Parameters, so we use all
+        // remaining parameters as-is. Non-extension paths are unchanged.
+        var parametersToEmit = method.Parameters.ToImmutableArray();
+
+        // Detect ref struct parameters — for the reduced form, Parameters contains only the
+        // non-receiver arguments, so no special-casing needed.
         bool hasRefStructParam = method.Parameters.Any(p => p.Type.IsRefLikeType);
+
+        var instanceType = isExtensionMethod
+            ? (method.ReceiverType?.ToDisplayString() ?? method.ReducedFrom!.Parameters[0].Type.ToDisplayString())
+            : (method.IsStatic ? null : method.ContainingType.ToDisplayString());
 
         return new InvocationInfo
         {
@@ -326,7 +347,8 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
             IsValueTask = isValueTask,
             HasAsyncReturnValue = hasReturnValue,
             InnerReturnType = innerReturnType,
-            IsStatic = method.IsStatic,
+            IsStatic = method.IsStatic && !isExtensionMethod,
+            IsExtensionMethod = isExtensionMethod,
             IsGenericMethod = method.IsGenericMethod,
             HasRefStructParam = hasRefStructParam,
             EmitTracing = tracedAttr is not null,
@@ -337,7 +359,7 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
             ErrorWhenPredicate = errorWhenPredicate,
             ErrorWhenMethodName = errorWhenMethodName,
             CustomTags = customTags,
-            Parameters = method.Parameters.Select(p => new ParamInfo
+            Parameters = parametersToEmit.Select(p => new ParamInfo
             {
                 Name = p.Name,
                 Type = p.Type.ToDisplayString(),
@@ -347,7 +369,7 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
                 DefaultValueExpression = p.HasExplicitDefaultValue ? FormatDefaultValue(p) : null,
                 IsRefStruct = p.Type.IsRefLikeType
             }).ToImmutableArray(),
-            InstanceType = method.IsStatic ? null : method.ContainingType.ToDisplayString(),
+            InstanceType = instanceType,
         };
     }
 
@@ -430,6 +452,7 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
     /// <summary>The inner type argument of Task&lt;T&gt;/ValueTask&lt;T&gt;, or null for non-generic.</summary>
     public string? InnerReturnType { get; set; }
     public bool IsStatic { get; set; }
+    public bool IsExtensionMethod { get; set; }
     public bool IsGenericMethod { get; set; }
     /// <summary>Whether any parameter is a ref struct (Span, ReadOnlySpan, etc.).</summary>
     public bool HasRefStructParam { get; set; }
@@ -469,6 +492,7 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
         HasAsyncReturnValue == other.HasAsyncReturnValue &&
         InnerReturnType == other.InnerReturnType &&
         IsStatic == other.IsStatic &&
+        IsExtensionMethod == other.IsExtensionMethod &&
         IsGenericMethod == other.IsGenericMethod &&
         HasRefStructParam == other.HasRefStructParam &&
         EmitTracing == other.EmitTracing &&
@@ -503,6 +527,7 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
             hash = hash * 31 + HasAsyncReturnValue.GetHashCode();
             hash = hash * 31 + (InnerReturnType?.GetHashCode() ?? 0);
             hash = hash * 31 + IsStatic.GetHashCode();
+            hash = hash * 31 + IsExtensionMethod.GetHashCode();
             hash = hash * 31 + IsGenericMethod.GetHashCode();
             hash = hash * 31 + HasRefStructParam.GetHashCode();
             hash = hash * 31 + EmitTracing.GetHashCode();

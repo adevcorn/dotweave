@@ -256,7 +256,24 @@ internal static class Emitter
             argList.Append($"{refMod}{safeName}");
         }
 
-        var callTarget = c.IsStatic ? c.ContainingType : "__this";
+        // For extension methods the call-through must use static invocation syntax:
+        //   ContainingType.Method(__this, arg1, arg2)
+        // rather than instance syntax (__this.Method(arg1, arg2)), because the target
+        // method is not actually a member of the receiver type → CS1061.
+        string callTarget;
+        if (c.IsExtensionMethod)
+        {
+            callTarget = c.ContainingType;
+            // Prepend __this as the first argument (the receiver / 'this' parameter).
+            if (argList.Length > 0)
+                argList.Insert(0, "__this, ");
+            else
+                argList.Append("__this");
+        }
+        else
+        {
+            callTarget = c.IsStatic ? c.ContainingType : "__this";
+        }
         var spanName = c.SpanName.Replace("\"", "\\\"");
 
         if (c.IsAsync && c.IsValueTask)

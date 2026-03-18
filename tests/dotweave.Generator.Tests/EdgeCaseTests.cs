@@ -37,6 +37,62 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void ExtensionMethod_OnSelf_Compiles()
+    {
+        // An extension method that is itself [Traced] must be called via static syntax
+        // in the interceptor (ContainingType.Method(__this, args...)), not instance syntax
+        // (__this.Method(args...)), because the method is not a member of the receiver type → CS1061.
+        var source = """
+            using dotweave;
+            public interface IBuilder { }
+            public static class BuilderExtensions
+            {
+                [Traced]
+                public static IBuilder MapFoo(this IBuilder app)
+                {
+                    return app;
+                }
+            }
+            public class Caller
+            {
+                public IBuilder Call(IBuilder app) => app.MapFoo();
+            }
+            """;
+        var generated = GeneratorTestHelper.RunAndVerifyCompilation(source);
+        Assert.Contains("Intercepted_MapFoo_0", generated);
+        // Call-through must be static: BuilderExtensions.MapFoo(__this)
+        Assert.Contains("BuilderExtensions.MapFoo(__this)", generated);
+        // Must NOT use instance syntax: __this.MapFoo()
+        Assert.DoesNotContain("__this.MapFoo()", generated);
+    }
+
+    [Fact]
+    public void ExtensionMethod_Compiles()
+    {
+        var source = """
+            using dotweave;
+            public static class StringExtensions
+            {
+                [Traced]
+                [Measured]
+                public static string Shout(this string input) => input.ToUpper();
+            }
+            public class Caller
+            {
+                public string Call() => "hello".Shout();
+            }
+            """;
+        var generated = GeneratorTestHelper.RunAndVerifyCompilation(source);
+        Assert.Contains("Intercepted_Shout_0", generated);
+        // Receiver type (string) must be the 'this' parameter, NOT the static class
+        Assert.Contains("this string __this", generated);
+        Assert.DoesNotContain("this StringExtensions", generated);
+        // Call-through must use static syntax: StringExtensions.Shout(__this)
+        Assert.Contains("StringExtensions.Shout(__this)", generated);
+        Assert.DoesNotContain("__this.Shout()", generated);
+    }
+
+    [Fact]
     public void StaticMethod_Compiles()
     {
         var source = """

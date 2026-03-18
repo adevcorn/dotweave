@@ -75,6 +75,12 @@ app.MapGet("/hello-custom/{name}", (string name, GreetingService svc) =>
     return Results.Ok(new { message = greeting });
 });
 
+app.MapGet("/hello-static/{name}", (string name) =>
+{
+    var greeting = StaticGreetingService.GetStaticGreeting(name);
+    return Results.Ok(new { message = greeting });
+});
+
 // ----- Telemetry API endpoints -----
 
 app.MapGet("/telemetry/traces", (TelemetryStore store) =>
