@@ -158,6 +158,15 @@ internal static class Emitter
         return sb.ToString();
     }
 
+    private static string ActivityKindExpression(int kind) => kind switch
+    {
+        1 => "System.Diagnostics.ActivityKind.Server",
+        2 => "System.Diagnostics.ActivityKind.Client",
+        3 => "System.Diagnostics.ActivityKind.Producer",
+        4 => "System.Diagnostics.ActivityKind.Consumer",
+        _ => "System.Diagnostics.ActivityKind.Internal",
+    };
+
     /// <summary>
     /// Determines if a parameter name is a C# keyword and needs the @ prefix.
     /// </summary>
@@ -346,7 +355,7 @@ internal static class Emitter
 
         if (c.EmitTracing)
         {
-            sb.AppendLine($"            var __activity = ActivitySource.StartActivity(\"{spanName}\");");
+            sb.AppendLine($"            var __activity = ActivitySource.StartActivity(\"{spanName}\", {ActivityKindExpression(c.ActivityKind)});");
         }
         if (c.EmitMetrics && c.EmitDuration)
         {
@@ -510,7 +519,7 @@ internal static class Emitter
     {
         if (c.EmitTracing)
         {
-            sb.AppendLine($"            using var __activity = ActivitySource.StartActivity(\"{spanName}\");");
+            sb.AppendLine($"            using var __activity = ActivitySource.StartActivity(\"{spanName}\", {ActivityKindExpression(c.ActivityKind)});");
         }
 
         if (c.EmitMetrics)
