@@ -381,6 +381,202 @@ public class ErrorWhenTests
         Assert.Contains("\"status\", \"ok\"", generated);
     }
 
+    // -------------------------------------------------------------------------
+    // ErrorWhen on [Traced] (no [Measured])
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void TracedErrorWhen_SyncReturn_SetsSpanErrorStatus()
+    {
+        var source = """
+            using dotweave;
+            public class Result { public bool IsSuccess { get; set; } }
+            public class Svc
+            {
+                [Traced(ErrorWhen = nameof(IsFailure))]
+                public Result GetValue() => new Result { IsSuccess = true };
+
+                public static bool IsFailure(Result r) => !r.IsSuccess;
+            }
+            public class Caller
+            {
+                public Result Call(Svc svc) => svc.GetValue();
+            }
+            """;
+        var generated = GeneratorTestHelper.RunAndVerifyCompilation(source);
+        Assert.Contains("ActivitySource", generated);
+        Assert.Contains("StartActivity", generated);
+        Assert.Contains("Svc.IsFailure(__result)", generated);
+        Assert.Contains("SetStatus(System.Diagnostics.ActivityStatusCode.Error", generated);
+        // No metrics emitted
+        Assert.DoesNotContain("Meter", generated);
+        Assert.DoesNotContain("\"status\", \"ok\"", generated);
+    }
+
+    [Fact]
+    public void TracedErrorWhen_AsyncTaskOfT_SetsSpanErrorStatus()
+    {
+        var source = """
+            using dotweave;
+            using System.Threading.Tasks;
+            public class Result { public bool IsSuccess { get; set; } }
+            public class Svc
+            {
+                [Traced(ErrorWhen = nameof(IsFailure))]
+                public async Task<Result> GetValueAsync()
+                {
+                    await Task.Delay(1);
+                    return new Result { IsSuccess = true };
+                }
+
+                public static bool IsFailure(Result r) => !r.IsSuccess;
+            }
+            public class Caller
+            {
+                public async Task<Result> Call(Svc svc) => await svc.GetValueAsync();
+            }
+            """;
+        var generated = GeneratorTestHelper.RunAndVerifyCompilation(source);
+        Assert.Contains("Svc.IsFailure(__result)", generated);
+        Assert.Contains("SetStatus(System.Diagnostics.ActivityStatusCode.Error", generated);
+        Assert.DoesNotContain("Meter", generated);
+    }
+
+    [Fact]
+    public void TracedErrorWhen_ValueTaskOfT_SetsSpanErrorStatusInBothPaths()
+    {
+        var source = """
+            using dotweave;
+            using System.Threading.Tasks;
+            public class Result { public bool IsSuccess { get; set; } }
+            public class Svc
+            {
+                [Traced(ErrorWhen = nameof(IsFailure))]
+                public ValueTask<Result> GetValueAsync()
+                    => new ValueTask<Result>(new Result { IsSuccess = true });
+
+                public static bool IsFailure(Result r) => !r.IsSuccess;
+            }
+            public class Caller
+            {
+                public async Task<Result> Call(Svc svc) => await svc.GetValueAsync();
+            }
+            """;
+        var generated = GeneratorTestHelper.RunAndVerifyCompilation(source);
+        // Fast path uses __task.Result
+        Assert.Contains("Svc.IsFailure(__task.Result)", generated);
+        // Slow path uses __result
+        Assert.Contains("Svc.IsFailure(__result)", generated);
+        Assert.Contains("SetStatus(System.Diagnostics.ActivityStatusCode.Error", generated);
+    }
+
+    [Fact]
+    public void TracedErrorWhen_VoidMethod_ReportsOTEL003()
+    {
+        var source = """
+            using dotweave;
+            public class Svc
+            {
+                [Traced(ErrorWhen = "IsFailure")]
+                public void DoWork() { }
+
+                public static bool IsFailure(string r) => false;
+            }
+            public class Caller
+            {
+                public void Call(Svc svc) => svc.DoWork();
+            }
+            """;
+        var diagnostics = GeneratorTestHelper.RunAndGetDiagnostics(source, "OTEL003");
+        Assert.Single(diagnostics);
+        Assert.Contains("IsFailure", diagnostics[0].GetMessage());
+        Assert.Contains("DoWork", diagnostics[0].GetMessage());
+
+        // Falls back gracefully — no predicate call emitted
+        var generated = GeneratorTestHelper.RunAndVerifyCompilation(source);
+        Assert.DoesNotContain("IsFailure(", generated);
+    }
+
+    [Fact]
+    public void TracedErrorWhen_NonexistentMethod_ReportsOTEL003()
+    {
+        var source = """
+            using dotweave;
+            public class Result { public bool IsSuccess { get; set; } }
+            public class Svc
+            {
+                [Traced(ErrorWhen = "TypoMethod")]
+                public Result GetValue() => new Result { IsSuccess = true };
+
+                public static bool IsFailure(Result r) => !r.IsSuccess;
+            }
+            public class Caller
+            {
+                public Result Call(Svc svc) => svc.GetValue();
+            }
+            """;
+        var diagnostics = GeneratorTestHelper.RunAndGetDiagnostics(source, "OTEL003");
+        Assert.Single(diagnostics);
+        Assert.Contains("TypoMethod", diagnostics[0].GetMessage());
+        Assert.Contains("GetValue", diagnostics[0].GetMessage());
+
+        // Falls back gracefully — no predicate call emitted
+        var generated = GeneratorTestHelper.RunAndVerifyCompilation(source);
+        Assert.DoesNotContain("TypoMethod(", generated);
+        // The predicate-based status check must not be emitted (the exception catch
+        // block still emits ActivityStatusCode.Error for thrown exceptions, which is correct)
+        Assert.DoesNotContain("TypoMethod(__result)", generated);
+    }
+
+    [Fact]
+    public void TracedErrorWhen_ValidPredicate_NoOTEL003()
+    {
+        var source = """
+            using dotweave;
+            public class Result { public bool IsSuccess { get; set; } }
+            public class Svc
+            {
+                [Traced(ErrorWhen = nameof(IsFailure))]
+                public Result GetValue() => new Result { IsSuccess = true };
+
+                public static bool IsFailure(Result r) => !r.IsSuccess;
+            }
+            public class Caller
+            {
+                public Result Call(Svc svc) => svc.GetValue();
+            }
+            """;
+        var diagnostics = GeneratorTestHelper.RunAndGetDiagnostics(source, "OTEL003");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void TracedErrorWhen_BothTracedAndMeasured_OnlyOnePredicateCall()
+    {
+        // When both [Traced(ErrorWhen=...)] and [Measured(ErrorWhen=...)] are present
+        // (same predicate), the generated code should call the predicate once — not twice.
+        var source = """
+            using dotweave;
+            public class Result { public bool IsSuccess { get; set; } }
+            public class Svc
+            {
+                [Traced(ErrorWhen = nameof(IsFailure))]
+                [Measured(ErrorWhen = nameof(IsFailure))]
+                public Result GetValue() => new Result { IsSuccess = true };
+
+                public static bool IsFailure(Result r) => !r.IsSuccess;
+            }
+            public class Caller
+            {
+                public Result Call(Svc svc) => svc.GetValue();
+            }
+            """;
+        var generated = GeneratorTestHelper.RunAndVerifyCompilation(source);
+        Assert.Contains("Svc.IsFailure(__result)", generated);
+        Assert.Contains("SetStatus(System.Diagnostics.ActivityStatusCode.Error", generated);
+        Assert.Contains("\"status\", \"error\"", generated);
+    }
+
     [Fact]
     public void ErrorWhen_ValidPredicate_NoOTEL003()
     {

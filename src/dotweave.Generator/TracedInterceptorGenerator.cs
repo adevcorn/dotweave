@@ -170,6 +170,51 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
         return null;
     }
 
+    /// <summary>
+    /// Resolves an ErrorWhen predicate method name to a fully-qualified call expression.
+    /// Returns (predicateExpression, methodName). predicateExpression is null when the
+    /// predicate could not be resolved (void/non-generic-async return, type mismatch, not found).
+    /// </summary>
+    private static (string? predicate, string methodName) ResolveErrorWhenPredicate(
+        IMethodSymbol method, string errorWhenName)
+    {
+        // Determine the effective return type that the predicate must accept.
+        // For Task<T>/ValueTask<T>, the predicate inspects T, not the wrapper.
+        ITypeSymbol? effectiveReturnType = null;
+        if (method.ReturnsVoid)
+        {
+            // Void methods have no result to inspect — cannot use ErrorWhen.
+        }
+        else if (IsAsyncReturn(method))
+        {
+            var namedRt = method.ReturnType as INamedTypeSymbol;
+            if (namedRt is { IsGenericType: true, TypeArguments.Length: 1 })
+                effectiveReturnType = namedRt.TypeArguments[0];
+            // else plain Task/ValueTask — no result to inspect
+        }
+        else
+        {
+            effectiveReturnType = method.ReturnType;
+        }
+
+        string? predicate = null;
+        if (effectiveReturnType is not null)
+        {
+            // Must be static, return bool, accept exactly one parameter
+            // whose type matches the method's effective return type.
+            var predicateMethod = method.ContainingType.GetMembers(errorWhenName)
+                .OfType<IMethodSymbol>()
+                .FirstOrDefault(m =>
+                    m.IsStatic &&
+                    m.ReturnType.SpecialType == SpecialType.System_Boolean &&
+                    m.Parameters.Length == 1 &&
+                    SymbolEqualityComparer.Default.Equals(m.Parameters[0].Type, effectiveReturnType));
+            if (predicateMethod is not null)
+                predicate = $"{method.ContainingType.ToDisplayString()}.{errorWhenName}";
+        }
+        return (predicate, errorWhenName);
+    }
+
     private static InvocationInfo? TransformInvocation(GeneratorSyntaxContext ctx, CancellationToken ct)
     {
         var invocation = (InvocationExpressionSyntax)ctx.Node;
@@ -202,6 +247,9 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
 
         string? customSpanName = null;
         int activityKind = 0; // ActivityKind.Internal
+        string? errorWhenPredicate = null;
+        string? errorWhenMethodName = null;
+
         if (tracedAttr is not null)
         {
             if (tracedAttr.ConstructorArguments.Length > 0 &&
@@ -212,8 +260,16 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
 
             foreach (var named in tracedAttr.NamedArguments)
             {
-                if (named.Key == "Kind" && named.Value.Value is int kindInt)
-                    activityKind = kindInt;
+                switch (named.Key)
+                {
+                    case "Kind" when named.Value.Value is int kindInt:
+                        activityKind = kindInt;
+                        break;
+                    case "ErrorWhen" when named.Value.Value is string tracedErrorWhenName:
+                        (errorWhenPredicate, errorWhenMethodName) = ResolveErrorWhenPredicate(
+                            method, tracedErrorWhenName);
+                        break;
+                }
             }
         }
 
@@ -222,8 +278,6 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
         bool emitCalls = true;
         bool emitDuration = true;
         bool emitInFlight = false;
-        string? errorWhenPredicate = null;
-        string? errorWhenMethodName = null;
         ImmutableArray<string> customTags = ImmutableArray<string>.Empty;
 
         if (measuredAttr is not null)
@@ -235,7 +289,7 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
                 customMetricName = m;
             }
 
-            // Read named properties: Calls, Duration, InFlight, Tags
+            // Read named properties: Calls, Duration, InFlight, Tags, ErrorWhen
             foreach (var named in measuredAttr.NamedArguments)
             {
                 switch (named.Key)
@@ -249,44 +303,10 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
                     case "InFlight" when named.Value.Value is bool bInFlight:
                         emitInFlight = bInFlight;
                         break;
-                    case "ErrorWhen" when named.Value.Value is string errorWhenName:
-                        // Determine the effective return type that the predicate must accept.
-                        // For Task<T>/ValueTask<T>, the predicate inspects T, not the wrapper.
-                        ITypeSymbol? effectiveReturnType = null;
-                        if (method.ReturnsVoid)
-                        {
-                            // Void methods have no result to inspect — cannot use ErrorWhen.
-                        }
-                        else if (IsAsyncReturn(method))
-                        {
-                            var namedRt = method.ReturnType as INamedTypeSymbol;
-                            if (namedRt is { IsGenericType: true, TypeArguments.Length: 1 })
-                                effectiveReturnType = namedRt.TypeArguments[0];
-                            // else plain Task/ValueTask — no result to inspect
-                        }
-                        else
-                        {
-                            effectiveReturnType = method.ReturnType;
-                        }
-
-                        if (effectiveReturnType is not null)
-                        {
-                            // Resolve the predicate method on the containing type.
-                            // Must be static, return bool, accept exactly one parameter
-                            // whose type matches the method's effective return type.
-                            var predicateMethod = method.ContainingType.GetMembers(errorWhenName)
-                                .OfType<IMethodSymbol>()
-                                .FirstOrDefault(m =>
-                                    m.IsStatic &&
-                                    m.ReturnType.SpecialType == SpecialType.System_Boolean &&
-                                    m.Parameters.Length == 1 &&
-                                    SymbolEqualityComparer.Default.Equals(m.Parameters[0].Type, effectiveReturnType));
-                            if (predicateMethod is not null)
-                            {
-                                errorWhenPredicate = $"{method.ContainingType.ToDisplayString()}.{errorWhenName}";
-                            }
-                        }
-                        errorWhenMethodName = errorWhenName;
+                    case "ErrorWhen" when named.Value.Value is string measuredErrorWhenName:
+                        // [Measured] ErrorWhen overrides [Traced] ErrorWhen when both are present.
+                        (errorWhenPredicate, errorWhenMethodName) = ResolveErrorWhenPredicate(
+                            method, measuredErrorWhenName);
                         break;
                     case "Tags" when !named.Value.IsNull:
                         var tagValues = named.Value.Values;
