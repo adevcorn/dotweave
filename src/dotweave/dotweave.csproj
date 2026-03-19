@@ -4,13 +4,22 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <IsPackable>true</IsPackable>
     <PackageId>dotweave</PackageId>
-    <Version>0.5.0</Version>
+    <Version>0.4.0</Version>
     <Description>Compile-time OpenTelemetry instrumentation for .NET using C# interceptors and source generators.</Description>
-    <PackageTags>opentelemetry;tracing;metrics;source-generator;interceptors;aop;observability</PackageTags>
+    <PackageTags>opentelemetry tracing metrics source-generator interceptors aop observability</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReleaseNotes>See https://github.com/adevcorn/dotweave/releases for the full release history and changelog.</PackageReleaseNotes>
     <DevelopmentDependency>true</DevelopmentDependency>
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);PackGeneratorAnalyzer</TargetsForTfmSpecificContentInPackage>
+    <!-- Source Link: embed source control metadata for debugging -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="all" />
+  </ItemGroup>
 
   <ItemGroup>
     <Compile Include="..\dotweave.Attributes\TracedAttribute.cs" Link="TracedAttribute.cs" />
@@ -22,6 +31,7 @@
     <None Include="build/dotweave.props" Pack="true" PackagePath="build/dotweave.props" />
     <None Include="buildTransitive/dotweave.props" Pack="true" PackagePath="buildTransitive/dotweave.props" />
     <None Include="README.md" Pack="true" PackagePath="README.md" />
+    <None Include="icon.png" Pack="true" PackagePath="icon.png" />
   </ItemGroup>
 
   <Target Name="PackGeneratorAnalyzer">

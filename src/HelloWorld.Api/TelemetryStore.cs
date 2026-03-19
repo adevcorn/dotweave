@@ -17,10 +17,20 @@ public sealed class TelemetryStore
     private readonly ConcurrentDictionary<string, MetricSnapshot> _metrics = new();
     private const int MaxTraces = 500;
 
+    private volatile bool _paused = false;
+
+    public bool IsPaused => _paused;
+
+    public void Pause() => _paused = true;
+    public void Resume() => _paused = false;
+    public bool TogglePause() { _paused = !_paused; return _paused; }
+
     // ---------- Traces ----------
 
     public void RecordActivity(Activity activity)
     {
+        if (_paused) return;
+
         var record = new TraceRecord
         {
             TraceId = activity.TraceId.ToString(),
@@ -55,6 +65,7 @@ public sealed class TelemetryStore
 
     public void RecordMetrics(IReadOnlyList<Metric> metrics)
     {
+        if (_paused) return;
         foreach (var metric in metrics)
         {
             var snapshot = new MetricSnapshot

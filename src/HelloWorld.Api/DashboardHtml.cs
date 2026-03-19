@@ -56,6 +56,10 @@ public static class DashboardHtml
     background: var(--green);
     animation: pulse 2s infinite;
   }
+  .header .status.paused {
+    background: var(--orange);
+    animation: none;
+  }
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
@@ -394,6 +398,7 @@ public static class DashboardHtml
     <span class="refresh-info">Auto-refresh: <span id="interval-label">2s</span></span>
     <div class="status" id="status-dot"></div>
     <button onclick="fetchAll()" title="Refresh now">Refresh</button>
+    <button onclick="togglePause()" id="pause-btn" title="Pause ingestion of new telemetry">Pause</button>
     <button onclick="generateTraffic()" title="Generate sample traffic">Send Requests</button>
   </div>
 </div>
@@ -777,8 +782,33 @@ function escAttr(s) {
 }
 
 // Initial fetch and start auto-refresh
+let refreshTimer = setInterval(fetchAll, 2000);
 fetchAll();
-setInterval(fetchAll, 2000);
+
+async function togglePause() {
+  const res = await fetch('/telemetry/pause', { method: 'POST' });
+  const { paused } = await res.json();
+
+  const btn = document.getElementById('pause-btn');
+  const dot = document.getElementById('status-dot');
+  const label = document.getElementById('interval-label');
+
+  if (paused) {
+    btn.textContent = 'Resume';
+    btn.classList.add('active');
+    dot.classList.add('paused');
+    label.textContent = 'paused';
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  } else {
+    btn.textContent = 'Pause';
+    btn.classList.remove('active');
+    dot.classList.remove('paused');
+    label.textContent = '2s';
+    refreshTimer = setInterval(fetchAll, 2000);
+    fetchAll();
+  }
+}
 </script>
 </body>
 </html>
