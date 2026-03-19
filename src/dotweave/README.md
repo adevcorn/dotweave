@@ -5,39 +5,75 @@ Compile-time OpenTelemetry instrumentation for .NET using C# interceptors and so
 ## Install
 
 ```xml
-<PackageReference Include="dotweave" Version="0.4.0" />
+<PackageReference Include="dotweave" Version="0.7.0" />
 ```
 
 No manual `InterceptorsNamespaces` wiring is required.
 
 ## Usage
 
+### 1. Annotate your methods
+
 ```csharp
 using dotweave;
+using System.Diagnostics;
 
-public class GreetingService
+public class OrderResult
 {
+    public bool IsSuccess { get; init; }
+    public string? OrderId { get; init; }
+}
+
+public class OrderService
+{
+    // Span + metrics — default names: "OrderService.PlaceOrder"
     [Traced]
     [Measured]
-    public string GetGreeting(string name) => $"Hello {name}";
-
-    [Traced("custom.greeting")]
-    [Measured("custom.greeting", InFlight = true, Tags = new[] { "style=fancy" })]
-    public async Task<string> GetFancyGreetingAsync(string name)
+    public async Task<OrderResult> PlaceOrderAsync(string customerId, decimal amount)
     {
-        await Task.Delay(100);
-        return $"Greetings, {name}!";
+        // Activity.Current is already set — add tags from inside the method
+        Activity.Current?.SetTag("order.customer_id", customerId);
+        Activity.Current?.SetTag("order.amount", amount);
+
+        var id = await SubmitAsync(customerId, amount);
+        return new OrderResult { IsSuccess = true, OrderId = id };
     }
+
+    // Custom span name, Client span kind, error classification via predicate
+    [Traced("db.query", Kind = ActivityKind.Client, ErrorWhen = nameof(IsFailedResult))]
+    [Measured(ErrorWhen = nameof(IsFailedResult), InFlight = true, Tags = new[] { "db=orders" })]
+    public async Task<OrderResult> GetOrderAsync(string orderId)
+    {
+        await Task.Delay(1);
+        return new OrderResult { IsSuccess = true, OrderId = orderId };
+    }
+
+    // Metrics only — duration histogram, no calls counter, custom name
+    [Measured("order.validation", Calls = false)]
+    public bool ValidateOrder(string customerId, decimal amount)
+        => !string.IsNullOrEmpty(customerId) && amount > 0;
+
+    // Predicate: returns true when the result should be treated as an error
+    public static bool IsFailedResult(OrderResult r) => !r.IsSuccess;
+
+    private static Task<string> SubmitAsync(string c, decimal a)
+        => Task.FromResult(Guid.NewGuid().ToString());
 }
 ```
 
-Register the OpenTelemetry sources:
+### 2. Register the OTel sources
 
 ```csharp
 builder.Services.AddOpenTelemetry()
-    .WithTracing(t => t.AddSource("dotweave.Traced"))
-    .WithMetrics(m => m.AddMeter("dotweave.Metrics"));
+    .WithTracing(t => t
+        .AddSource("dotweave.Traced")
+        .AddOtlpExporter())
+    .WithMetrics(m => m
+        .AddMeter("dotweave.Metrics")
+        .AddOtlpExporter());
 ```
+
+Every call site is instrumented at compile time — no runtime reflection, no dynamic proxies.
 
 ## `[Traced]` attribute
 

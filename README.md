@@ -7,33 +7,77 @@ Mark your methods with `[Traced]` and `[Measured]` — dotweave generates interc
 ## Install
 
 ```xml
-<PackageReference Include="dotweave" Version="0.4.0" />
+<PackageReference Include="dotweave" Version="0.7.0" />
 ```
 
-That's it. The package auto-configures `InterceptorsNamespaces` via MSBuild props.
+The package auto-configures `InterceptorsNamespaces` via MSBuild props. No other setup is needed.
 
 ## Quick start
 
+### 1. Annotate your methods
+
 ```csharp
 using dotweave;
+using System.Diagnostics;
 
-public class GreetingService
+public class OrderResult
 {
+    public bool IsSuccess { get; init; }
+    public string? OrderId { get; init; }
+    public string? Error { get; init; }
+}
+
+public class OrderService
+{
+    // Traced span + metrics counter/histogram. Span name: "OrderService.PlaceOrder"
     [Traced]
     [Measured]
-    public string GetGreeting(string name) => $"Hello, {name}!";
+    public async Task<OrderResult> PlaceOrderAsync(string customerId, decimal amount)
+    {
+        // Activity.Current is already set — add tags directly from the method body
+        Activity.Current?.SetTag("order.customer_id", customerId);
+        Activity.Current?.SetTag("order.amount", amount);
+
+        var orderId = await SubmitToBackendAsync(customerId, amount);
+        return new OrderResult { IsSuccess = true, OrderId = orderId };
+    }
+
+    // Span kind = Client (outbound call), ErrorWhen marks the span as failed
+    // when the result indicates a business-level error — without throwing.
+    [Traced("db.query", Kind = ActivityKind.Client, ErrorWhen = nameof(IsFailedResult))]
+    [Measured(ErrorWhen = nameof(IsFailedResult), InFlight = true,
+              Tags = new[] { "db=orders" })]
+    public async Task<OrderResult> GetOrderAsync(string orderId)
+    {
+        await Task.Delay(1); // simulate I/O
+        return new OrderResult { IsSuccess = true, OrderId = orderId };
+    }
+
+    // Metrics only — no span. Duration histogram with a custom name.
+    [Measured("order.validation", Calls = false)]
+    public bool ValidateOrder(string customerId, decimal amount)
+        => !string.IsNullOrEmpty(customerId) && amount > 0;
+
+    public static bool IsFailedResult(OrderResult r) => !r.IsSuccess;
+
+    private static Task<string> SubmitToBackendAsync(string customerId, decimal amount)
+        => Task.FromResult(Guid.NewGuid().ToString());
 }
 ```
 
-Register the OpenTelemetry sources in your app:
+### 2. Register the OTel sources
 
 ```csharp
 builder.Services.AddOpenTelemetry()
-    .WithTracing(t => t.AddSource("dotweave.Traced"))
-    .WithMetrics(m => m.AddMeter("dotweave.Metrics"));
+    .WithTracing(t => t
+        .AddSource("dotweave.Traced")
+        .AddOtlpExporter())
+    .WithMetrics(m => m
+        .AddMeter("dotweave.Metrics")
+        .AddOtlpExporter());
 ```
 
-Every call to `GetGreeting` is now automatically wrapped in a tracing span and emits call count + duration metrics.
+That's it. Every call site is now instrumented at compile time — no runtime reflection, no dynamic proxies.
 
 ## Attributes
 
