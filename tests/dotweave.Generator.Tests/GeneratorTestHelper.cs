@@ -17,12 +17,14 @@ public static class GeneratorTestHelper
     /// </summary>
     private const string AttributeSource = """
         using System;
+        using System.Diagnostics;
         namespace dotweave;
 
         [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
         public sealed class TracedAttribute : Attribute
         {
             public string? SpanName { get; }
+            public ActivityKind Kind { get; set; } = ActivityKind.Internal;
             public TracedAttribute() { }
             public TracedAttribute(string spanName) { SpanName = spanName; }
         }

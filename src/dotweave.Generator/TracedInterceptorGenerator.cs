@@ -201,11 +201,20 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
         var lineSpan = location.GetLineSpan();
 
         string? customSpanName = null;
-        if (tracedAttr is not null &&
-            tracedAttr.ConstructorArguments.Length > 0 &&
-            tracedAttr.ConstructorArguments[0].Value is string s)
+        int activityKind = 0; // ActivityKind.Internal
+        if (tracedAttr is not null)
         {
-            customSpanName = s;
+            if (tracedAttr.ConstructorArguments.Length > 0 &&
+                tracedAttr.ConstructorArguments[0].Value is string s)
+            {
+                customSpanName = s;
+            }
+
+            foreach (var named in tracedAttr.NamedArguments)
+            {
+                if (named.Key == "Kind" && named.Value.Value is int kindInt)
+                    activityKind = kindInt;
+            }
         }
 
         string? customMetricName = null;
@@ -352,6 +361,7 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
             IsGenericMethod = method.IsGenericMethod,
             HasRefStructParam = hasRefStructParam,
             EmitTracing = tracedAttr is not null,
+            ActivityKind = activityKind,
             EmitMetrics = measuredAttr is not null,
             EmitCalls = emitCalls,
             EmitDuration = emitDuration,
@@ -457,6 +467,8 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
     /// <summary>Whether any parameter is a ref struct (Span, ReadOnlySpan, etc.).</summary>
     public bool HasRefStructParam { get; set; }
     public bool EmitTracing { get; set; }
+    /// <summary>The ActivityKind to use when starting the span. Defaults to Internal (0).</summary>
+    public int ActivityKind { get; set; }
     public bool EmitMetrics { get; set; }
     public bool EmitCalls { get; set; }
     public bool EmitDuration { get; set; }
@@ -496,6 +508,7 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
         IsGenericMethod == other.IsGenericMethod &&
         HasRefStructParam == other.HasRefStructParam &&
         EmitTracing == other.EmitTracing &&
+        ActivityKind == other.ActivityKind &&
         EmitMetrics == other.EmitMetrics &&
         EmitCalls == other.EmitCalls &&
         EmitDuration == other.EmitDuration &&
@@ -531,6 +544,7 @@ internal struct InvocationInfo : IEquatable<InvocationInfo>
             hash = hash * 31 + IsGenericMethod.GetHashCode();
             hash = hash * 31 + HasRefStructParam.GetHashCode();
             hash = hash * 31 + EmitTracing.GetHashCode();
+            hash = hash * 31 + ActivityKind;
             hash = hash * 31 + EmitMetrics.GetHashCode();
             hash = hash * 31 + EmitCalls.GetHashCode();
             hash = hash * 31 + EmitDuration.GetHashCode();

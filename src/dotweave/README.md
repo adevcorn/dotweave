@@ -45,7 +45,13 @@ Creates an `Activity` (OpenTelemetry span) around each call site.
 
 - Default span name: `TypeName.MethodName`
 - Pass a string to use a custom name: `[Traced("my.span")]`
+- Set the span kind: `[Traced(Kind = ActivityKind.Client)]`
 - On error: sets `ActivityStatusCode.Error` and adds an `exception` event with type, message, and stacktrace
+
+| Property    | Type           | Default                   | Description                          |
+|-------------|----------------|---------------------------|--------------------------------------|
+| _(positional)_ | `string`    | `"TypeName.MethodName"`   | Custom span name                     |
+| `Kind`      | `ActivityKind` | `ActivityKind.Internal`   | OTel span kind (Internal, Client, Server, Producer, Consumer) |
 
 ## `[Measured]` attribute
 

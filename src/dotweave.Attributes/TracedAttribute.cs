@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 
 namespace dotweave;
 
@@ -14,6 +15,11 @@ public sealed class TracedAttribute : Attribute
     /// Optional custom span name. If not specified, "TypeName.MethodName" is used.
     /// </summary>
     public string? SpanName { get; }
+
+    /// <summary>
+    /// The kind of the span. Defaults to <see cref="ActivityKind.Internal"/>.
+    /// </summary>
+    public ActivityKind Kind { get; set; } = ActivityKind.Internal;
 
     public TracedAttribute() { }
 

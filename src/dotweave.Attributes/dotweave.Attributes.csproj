@@ -6,4 +6,8 @@
     <Description>Attribute definitions for dotweave source generator</Description>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="9.0.0" />
+  </ItemGroup>
+
 </Project>

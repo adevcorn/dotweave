@@ -42,9 +42,16 @@ Every call to `GetGreeting` is now automatically wrapped in a tracing span and e
 Creates an `Activity` (OpenTelemetry span) around each call site.
 
 ```csharp
-[Traced]                          // span name defaults to "TypeName.MethodName"
-[Traced("custom.span-name")]      // explicit span name
+[Traced]                                        // span name defaults to "TypeName.MethodName"
+[Traced("custom.span-name")]                    // explicit span name
+[Traced(Kind = ActivityKind.Client)]            // set the span kind
+[Traced("db.query", Kind = ActivityKind.Client)] // both
 ```
+
+| Property    | Type           | Default                   | Description                          |
+|-------------|----------------|---------------------------|--------------------------------------|
+| _(positional)_ | `string`    | `"TypeName.MethodName"`   | Custom span name                     |
+| `Kind`      | `ActivityKind` | `ActivityKind.Internal`   | OTel span kind (Internal, Client, Server, Producer, Consumer) |
 
 On error, the span status is set to `Error` with an `exception` event containing type, message, and stacktrace.
 
