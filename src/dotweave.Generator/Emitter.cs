@@ -538,10 +538,7 @@ internal static class Emitter
 
     private static void EmitMetricsOnSuccess(StringBuilder sb, InvocationInfo c, string? resultExpr = "__result")
     {
-        if (!c.EmitMetrics)
-            return;
-
-        var fieldSuffix = MetricFieldSuffix(c.MetricName);
+        var fieldSuffix = c.EmitMetrics ? MetricFieldSuffix(c.MetricName) : "";
         EmitInlineMetricsSuccess(sb, c, fieldSuffix, resultExpr);
     }
 
@@ -555,18 +552,28 @@ internal static class Emitter
     }
 
     /// <summary>
-    /// Emits metric recording for the success path. Used by both the main method helpers
-    /// and the ValueTask inline paths.
-    /// Does NOT emit InFlight decrement -- that belongs in the finally block.
-    /// When <see cref="InvocationInfo.ErrorWhenPredicate"/> is set and a result variable
-    /// is available, the generated code calls the predicate to determine status.
-    /// When the predicate detects an error and tracing is enabled, the span is also
-    /// marked with <c>ActivityStatusCode.Error</c>.
+    /// Emits success-path side effects: metric recording and/or span status from
+    /// the ErrorWhen predicate. Used by both the main method helpers and the ValueTask
+    /// inline paths. Does NOT emit InFlight decrement — that belongs in the finally block.
+    /// <list type="bullet">
+    ///   <item>When <see cref="InvocationInfo.EmitMetrics"/> is true, records calls/duration.</item>
+    ///   <item>When <see cref="InvocationInfo.ErrorWhenPredicate"/> is set and a result variable
+    ///   is available, the generated code calls the predicate. If tracing is enabled, the span
+    ///   is also marked <c>ActivityStatusCode.Error</c> when the predicate returns true.</item>
+    /// </list>
     /// </summary>
     private static void EmitInlineMetricsSuccess(StringBuilder sb, InvocationInfo c, string fieldSuffix, string? resultExpr = "__result")
     {
+        // Tracing-only ErrorWhen: no metrics to record, but still need to set span status.
         if (!c.EmitMetrics)
+        {
+            if (c.EmitTracing && c.ErrorWhenPredicate is not null && resultExpr is not null)
+            {
+                sb.AppendLine($"                if ({c.ErrorWhenPredicate}({resultExpr}))");
+                sb.AppendLine("                    __activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, \"ErrorWhen predicate returned true\");");
+            }
             return;
+        }
 
         if (c.ErrorWhenPredicate is not null && resultExpr is not null)
         {

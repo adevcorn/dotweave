@@ -25,6 +25,7 @@ public static class GeneratorTestHelper
         {
             public string? SpanName { get; }
             public ActivityKind Kind { get; set; } = ActivityKind.Internal;
+            public string? ErrorWhen { get; set; }
             public TracedAttribute() { }
             public TracedAttribute(string spanName) { SpanName = spanName; }
         }

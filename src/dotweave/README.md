@@ -46,12 +46,24 @@ Creates an `Activity` (OpenTelemetry span) around each call site.
 - Default span name: `TypeName.MethodName`
 - Pass a string to use a custom name: `[Traced("my.span")]`
 - Set the span kind: `[Traced(Kind = ActivityKind.Client)]`
+- Set span status to Error based on a predicate: `[Traced(ErrorWhen = nameof(IsFailure))]`
 - On error: sets `ActivityStatusCode.Error` and adds an `exception` event with type, message, and stacktrace
+- To add tags or events from inside the method body, use `Activity.Current` — the interceptor starts the span before the method runs, so it is always set when your code executes:
+
+```csharp
+[Traced]
+public string GetOrder(int id)
+{
+    Activity.Current?.SetTag("order.id", id);
+    // ...
+}
+```
 
 | Property    | Type           | Default                   | Description                          |
 |-------------|----------------|---------------------------|--------------------------------------|
 | _(positional)_ | `string`    | `"TypeName.MethodName"`   | Custom span name                     |
 | `Kind`      | `ActivityKind` | `ActivityKind.Internal`   | OTel span kind (Internal, Client, Server, Producer, Consumer) |
+| `ErrorWhen` | `string`       | `null`                    | Name of a static bool predicate on the same class; when it returns `true` the span status is set to `Error` |
 
 ## `[Measured]` attribute
 
