@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 0.6.0). If set, skips version auto-detection and publishes this version directly.'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -23,6 +28,16 @@ jobs:
       - name: Determine next version
         id: version
         run: |
+          # If a version was provided manually, use it directly.
+          if [ -n "${{ inputs.version }}" ]; then
+            NEXT_VERSION="${{ inputs.version }}"
+            echo "SKIP=false" >> "$GITHUB_OUTPUT"
+            echo "NEXT_VERSION=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+            echo "NEXT_TAG=v$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+            echo "Using manually provided version: $NEXT_VERSION"
+            exit 0
+          fi
+
           LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -1)
           if [ -z "$LATEST_TAG" ]; then
             LATEST_TAG=""
@@ -106,8 +121,8 @@ jobs:
       - name: Create tag
         if: steps.version.outputs.SKIP == 'false'
         run: |
-          git tag "${{ steps.version.outputs.NEXT_TAG }}"
-          git push origin "${{ steps.version.outputs.NEXT_TAG }}"
+          git tag "${{ steps.version.outputs.NEXT_TAG }}" || echo "Tag already exists, skipping."
+          git push origin "${{ steps.version.outputs.NEXT_TAG }}" || echo "Tag already on remote, skipping."
 
       - name: Create GitHub Release
         if: steps.version.outputs.SKIP == 'false'
