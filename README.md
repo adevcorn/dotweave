@@ -7,7 +7,7 @@ Mark your methods with `[Traced]` and `[Measured]` — dotweave generates interc
 ## Install
 
 ```xml
-<PackageReference Include="dotweave" Version="0.1.0" />
+<PackageReference Include="dotweave" Version="0.4.0" />
 ```
 
 That's it. The package auto-configures `InterceptorsNamespaces` via MSBuild props.
@@ -58,14 +58,16 @@ Emits metrics for each call site. All options are optional.
 [Measured(Calls = false)]         // duration only, no call counter
 [Measured(InFlight = true)]       // adds .inflight UpDownCounter for concurrency tracking
 [Measured(Tags = new[] { "endpoint=api", "tier=free" })]  // custom tags on all recordings
+[Measured(ErrorWhen = nameof(IsFailure))]  // call a predicate to classify results as errors
 ```
 
-| Property   | Type       | Default | Description                                    |
-|------------|------------|---------|------------------------------------------------|
-| `Calls`    | `bool`     | `true`  | Emit `{name}.calls` counter                   |
-| `Duration` | `bool`     | `true`  | Emit `{name}.duration` histogram (ms)         |
-| `InFlight` | `bool`     | `false` | Emit `{name}.inflight` up/down counter        |
-| `Tags`     | `string[]` | `null`  | Custom `key=value` tags on all recordings      |
+| Property     | Type       | Default | Description                                    |
+|--------------|------------|---------|------------------------------------------------|
+| `Calls`      | `bool`     | `true`  | Emit `{name}.calls` counter                   |
+| `Duration`   | `bool`     | `true`  | Emit `{name}.duration` histogram (ms)         |
+| `InFlight`   | `bool`     | `false` | Emit `{name}.inflight` up/down counter        |
+| `Tags`       | `string[]` | `null`  | Custom `key=value` tags on all recordings      |
+| `ErrorWhen`  | `string`   | `null`  | Name of a static bool predicate on the same class; when it returns `true` the recording is tagged `status="error"` |
 
 Both attributes can be combined on the same method.
 
@@ -78,6 +80,14 @@ Both attributes can be combined on the same method.
 - Methods with `ref`, `out`, `in` parameters
 
 **Not supported:** Generic methods (diagnostic `OTEL001`) and ref struct parameters on async methods (diagnostic `OTEL002`).
+
+## Diagnostics
+
+| Code      | Description |
+|-----------|-------------|
+| `OTEL001` | Generic methods cannot be intercepted — remove `[Traced]`/`[Measured]` or make the method non-generic |
+| `OTEL002` | Ref struct parameters on async methods are unsupported |
+| `OTEL003` | `ErrorWhen` predicate not found or invalid — must be a `static bool` method on the same class accepting the method's return type |
 
 ## How it works
 
@@ -101,18 +111,21 @@ src/
 
 ## Demo app
 
-The `HelloWorld.Api` project is a working ASP.NET Core app with three instrumented endpoints and a built-in dashboard at `/dashboard`.
+The `HelloWorld.Api` project is a working ASP.NET Core app with four instrumented endpoints and a built-in dashboard at `/dashboard`.
 
 ```bash
 cd src/HelloWorld.Api
 dotnet run
 # Visit http://localhost:5199/dashboard
-# Hit http://localhost:5199/hello/world to generate telemetry
+# Hit http://localhost:5199/hello/world        — sync, default instrumentation
+# Hit http://localhost:5199/hello-async/world  — async with InFlight tracking
+# Hit http://localhost:5199/hello-custom/world — custom span/metric names
+# Hit http://localhost:5199/hello-static/world — static method interception
 ```
 
 ## Requirements
 
-- .NET 9.0+ SDK (uses C# interceptors)
+- .NET 10.0+ SDK (uses C# interceptors)
 - An OpenTelemetry-compatible backend or the built-in dashboard for viewing telemetry
 
 ## License

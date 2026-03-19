@@ -89,6 +89,12 @@ app.MapGet("/telemetry/traces", (TelemetryStore store) =>
 app.MapGet("/telemetry/metrics", (TelemetryStore store) =>
     Results.Json(store.GetMetrics(), TelemetryStore.JsonOptions));
 
+app.MapPost("/telemetry/pause", (TelemetryStore store) =>
+{
+    bool nowPaused = store.TogglePause();
+    return Results.Json(new { paused = nowPaused }, TelemetryStore.JsonOptions);
+});
+
 // ----- Dashboard -----
 
 app.MapGet("/dashboard", () =>
