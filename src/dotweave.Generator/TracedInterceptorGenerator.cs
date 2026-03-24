@@ -233,8 +233,31 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
         var measuredAttr = attributeSource.GetAttributes().FirstOrDefault(a =>
             a.AttributeClass?.ToDisplayString() == MeasuredAttributeFqn);
 
+        // If no attribute found directly, walk the interface/override chain.
+        // This handles two cases:
+        //   1. [Traced] on the concrete class, called via an interface-typed variable:
+        //      GetSymbolInfo returns the interface method (no attribute), so we find the
+        //      concrete implementation and check its attributes.
+        //   2. [Traced] on the interface method, called via a concrete-typed variable:
+        //      GetSymbolInfo returns the concrete method (Inherited=false, so no attribute),
+        //      so we find the interface member and check its attributes.
+        // In both cases the attribute source for reading attribute arguments is the symbol
+        // that actually carries the attribute, but ContainingType (for span name etc.) stays
+        // as the concrete method's ContainingType.
+        IMethodSymbol? attributeOwner = null;
+        if (tracedAttr is null && measuredAttr is null)
+        {
+            attributeOwner = FindAttributeOnChain(method, TracedAttributeFqn, MeasuredAttributeFqn,
+                out tracedAttr, out measuredAttr);
+        }
+
         if (tracedAttr is null && measuredAttr is null)
             return null;
+
+        // The method symbol to use when resolving ErrorWhen predicates: if the attribute was
+        // found on a chained symbol (e.g. the interface member), use that symbol so the
+        // predicate is looked up on the correct containing type.
+        var attributeMethodSymbol = attributeOwner ?? attributeSource;
 
         // Get the location of the method name in the invocation expression.
         var expressionSyntax = invocation.Expression;
@@ -267,7 +290,7 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
                         break;
                     case "ErrorWhen" when named.Value.Value is string tracedErrorWhenName:
                         (errorWhenPredicate, errorWhenMethodName) = ResolveErrorWhenPredicate(
-                            method, tracedErrorWhenName);
+                            attributeMethodSymbol, tracedErrorWhenName);
                         break;
                 }
             }
@@ -306,7 +329,7 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
                     case "ErrorWhen" when named.Value.Value is string measuredErrorWhenName:
                         // [Measured] ErrorWhen overrides [Traced] ErrorWhen when both are present.
                         (errorWhenPredicate, errorWhenMethodName) = ResolveErrorWhenPredicate(
-                            method, measuredErrorWhenName);
+                            attributeMethodSymbol, measuredErrorWhenName);
                         break;
                     case "Tags" when !named.Value.IsNull:
                         var tagValues = named.Value.Values;
@@ -442,6 +465,96 @@ public sealed class TracedInterceptorGenerator : IIncrementalGenerator
 
         // int, short, byte, etc. -- ToString() is sufficient
         return value.ToString();
+    }
+
+    /// <summary>
+    /// Searches the interface and override chain of <paramref name="method"/> for
+    /// <see cref="TracedAttributeFqn"/> or <see cref="MeasuredAttributeFqn"/>.
+    ///
+    /// Handles two scenarios:
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <c>[Traced]</c> on the concrete class, called via an interface-typed variable:
+    ///     <c>GetSymbolInfo</c> returns the interface method (no attribute), so we find all
+    ///     concrete implementations and check their attributes.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <c>[Traced]</c> on the interface method, called via a concrete-typed variable:
+    ///     <c>GetSymbolInfo</c> returns the concrete method (<c>Inherited=false</c>, so no
+    ///     attribute), so we find the interface member and check its attributes.
+    ///   </description></item>
+    /// </list>
+    ///
+    /// Returns the <see cref="IMethodSymbol"/> that owns the attribute (used as the
+    /// attribute-source for reading attribute arguments), or <c>null</c> if not found.
+    /// </summary>
+    private static IMethodSymbol? FindAttributeOnChain(
+        IMethodSymbol method,
+        string tracedFqn,
+        string measuredFqn,
+        out AttributeData? tracedAttr,
+        out AttributeData? measuredAttr)
+    {
+        tracedAttr = null;
+        measuredAttr = null;
+
+        // Case 1: method is an interface method (called via interface-typed variable).
+        // Walk every concrete type in the compilation to find an implementation that carries
+        // the attribute. We can't enumerate all types, but we CAN check the other direction:
+        // if this is already an interface method, look for implementations via AllInterfaces
+        // on the method's own containing type (won't help here) — so instead treat this as
+        // Case 2 from the implementing side: fall through to check the override chain, and
+        // also check all interfaces of the method's containing type.
+        //
+        // Case 2: method is a concrete (class) method, called via concrete-typed variable,
+        // but [Traced] is on the interface. Walk ContainingType.AllInterfaces to find the
+        // interface member that this method implements, then check that member's attributes.
+
+        // Walk the override chain upward (handles base class virtual overrides too)
+        var walker = method;
+        while (walker is not null)
+        {
+            // Check all interfaces of the containing type of this walker
+            foreach (var iface in walker.ContainingType.AllInterfaces)
+            {
+                foreach (var ifaceMember in iface.GetMembers(walker.Name).OfType<IMethodSymbol>())
+                {
+                    // Check if walker is the implementation of this interface member
+                    var impl = walker.ContainingType.FindImplementationForInterfaceMember(ifaceMember)
+                        as IMethodSymbol;
+                    if (impl is not null && SymbolEqualityComparer.Default.Equals(impl, walker))
+                    {
+                        // walker implements ifaceMember — check both for the attribute
+                        var t = ifaceMember.GetAttributes().FirstOrDefault(a =>
+                            a.AttributeClass?.ToDisplayString() == tracedFqn);
+                        var m = ifaceMember.GetAttributes().FirstOrDefault(a =>
+                            a.AttributeClass?.ToDisplayString() == measuredFqn);
+                        if (t is not null || m is not null)
+                        {
+                            tracedAttr = t;
+                            measuredAttr = m;
+                            return ifaceMember;
+                        }
+
+                        // Also check the concrete implementing method itself (attribute on impl)
+                        t = impl.GetAttributes().FirstOrDefault(a =>
+                            a.AttributeClass?.ToDisplayString() == tracedFqn);
+                        m = impl.GetAttributes().FirstOrDefault(a =>
+                            a.AttributeClass?.ToDisplayString() == measuredFqn);
+                        if (t is not null || m is not null)
+                        {
+                            tracedAttr = t;
+                            measuredAttr = m;
+                            return impl;
+                        }
+                    }
+                }
+            }
+
+            walker = walker.OverriddenMethod;
+        }
+
+        return null;
     }
 
     private static bool IsAsyncReturn(IMethodSymbol method)
