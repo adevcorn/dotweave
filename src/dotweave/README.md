@@ -4,8 +4,8 @@ Compile-time OpenTelemetry instrumentation for .NET using C# interceptors and so
 
 ## Install
 
-```xml
-<PackageReference Include="dotweave" Version="0.9.0" />
+```sh
+dotnet add package dotweave
 ```
 
 No manual `InterceptorsNamespaces` wiring is required.

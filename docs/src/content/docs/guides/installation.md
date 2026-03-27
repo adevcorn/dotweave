@@ -7,17 +7,15 @@ sidebar:
 
 ## NuGet package
 
-Add the `dotweave` meta-package to your project file:
-
-```xml
-<PackageReference Include="dotweave" Version="0.7.0" />
+```sh
+dotnet add package dotweave
 ```
 
 This single package bundles:
 - `dotweave.Attributes` — the `[Traced]` and `[Measured]` attribute definitions
 - `dotweave.Generator` — the Roslyn incremental source generator
 
-The package includes MSBuild `.props` files that automatically configure `InterceptorsNamespaces` for your project. No manual project file edits are needed beyond the `PackageReference`.
+The package includes MSBuild `.props` files that automatically configure `InterceptorsNamespaces` for your project. No other setup is needed.
 
 ## Register the OTel sources
 
