@@ -1,0 +1,23 @@
+/* dotweave brand overrides */
+
+:root {
+  --sl-color-accent-low: #1a2744;
+  --sl-color-accent: #4f7cff;
+  --sl-color-accent-high: #a5bcff;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #dde6ff;
+  --sl-color-accent: #2a52cc;
+  --sl-color-accent-high: #1a3388;
+}
+
+/* Tighten hero section */
+.hero > .sl-flex {
+  gap: 1.5rem;
+}
+
+/* Code blocks: slightly larger font */
+.sl-markdown-content pre {
+  font-size: 0.875rem;
+}
