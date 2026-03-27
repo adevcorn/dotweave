@@ -4,10 +4,12 @@ Compile-time OpenTelemetry instrumentation for .NET using C# interceptors and so
 
 Mark your methods with `[Traced]` and `[Measured]` — dotweave generates interceptor code at compile time that wraps every call site with OpenTelemetry spans and metrics. Zero reflection, zero runtime overhead, AOT-compatible.
 
+**[Documentation site →](https://adevcorn.github.io/dotweave)**
+
 ## Install
 
 ```xml
-<PackageReference Include="dotweave" Version="0.7.0" />
+<PackageReference Include="dotweave" Version="0.9.0" />
 ```
 
 The package auto-configures `InterceptorsNamespaces` via MSBuild props. No other setup is needed.
@@ -142,8 +144,10 @@ Both attributes can be combined on the same method.
 - `ValueTask` / `ValueTask<T>` (with synchronous fast-path optimization)
 - Instance and static methods
 - Methods with `ref`, `out`, `in` parameters
+- Interface methods — `[Traced]`/`[Measured]` on an interface method is resolved at all call sites, including those using a concrete-typed variable
+- Override chains — attribute on a base class method is resolved correctly at all call sites
 
-**Not supported:** Generic methods (diagnostic `OTEL001`) and ref struct parameters on async methods (diagnostic `OTEL002`).
+**Not supported:** Generic methods (diagnostic `OTEL001`) and ref struct parameters on async methods (diagnostic `OTEL002`). Calling an interface method via an interface-typed variable when the attribute is only on the concrete implementation is also not supported (the generator cannot pick a concrete type at compile time).
 
 ## Diagnostics
 
