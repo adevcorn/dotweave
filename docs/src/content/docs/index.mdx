@@ -1,0 +1,51 @@
+---
+title: dotweave
+description: Compile-time OpenTelemetry instrumentation for .NET using C# interceptors and source generators. Zero reflection, zero runtime overhead, AOT-compatible.
+template: splash
+hero:
+  tagline: Compile-time OpenTelemetry instrumentation for .NET. Two attributes. Zero overhead.
+  image:
+    file: ../../../public/icon.png
+  actions:
+    - text: Get Started
+      link: /dotweave/guides/introduction/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/adevcorn/dotweave
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Why dotweave?
+
+<CardGrid stagger>
+  <Card title="Zero runtime overhead" icon="rocket">
+    Instrumentation is injected at **compile time** using C# interceptors. No reflection, no dynamic proxies — just compiled C# code.
+  </Card>
+  <Card title="AOT-compatible" icon="approve-check-circle">
+    Works with .NET Native AOT out of the box. Nothing is dynamic, nothing is resolved at runtime.
+  </Card>
+  <Card title="OpenTelemetry-native" icon="information">
+    Built on standard .NET OTel APIs — `ActivitySource` for tracing, `Meter` for metrics. Drop into any OTel pipeline.
+  </Card>
+  <Card title="Async-aware" icon="seti:clock">
+    Full support for `Task`, `Task<T>`, `ValueTask`, and `ValueTask<T>` with a synchronous fast-path optimization for `ValueTask`.
+  </Card>
+  <Card title="Two attributes, that's it" icon="pencil">
+    Add `[Traced]` for spans and `[Measured]` for metrics. dotweave handles all the wiring at compile time.
+  </Card>
+  <Card title="Roslyn source generator" icon="setting">
+    Powered by a Roslyn incremental source generator — fast, incremental, and fully integrated with the C# compiler.
+  </Card>
+</CardGrid>
+
+## Install
+
+```xml
+<PackageReference Include="dotweave" Version="0.7.0" />
+```
+
+The package auto-configures `InterceptorsNamespaces` via MSBuild props. No other setup needed.
