@@ -8,8 +8,8 @@ Mark your methods with `[Traced]` and `[Measured]` — dotweave generates interc
 
 ## Install
 
-```xml
-<PackageReference Include="dotweave" Version="0.9.0" />
+```sh
+dotnet add package dotweave
 ```
 
 The package auto-configures `InterceptorsNamespaces` via MSBuild props. No other setup is needed.
