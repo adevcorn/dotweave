@@ -142,8 +142,8 @@ Both attributes can be combined on the same method.
 - Sync methods (void and non-void)
 - `Task` / `Task<T>`
 - `ValueTask` / `ValueTask<T>` (with synchronous fast-path optimization)
-- Instance and static methods
-- Methods with `ref`, `out`, `in` parameters
+- Instance, static, and extension methods
+- Methods with `ref`, `out`, `in` parameters (including `params` and optional parameters)
 - Interface methods — `[Traced]`/`[Measured]` on an interface method is resolved at all call sites, including those using a concrete-typed variable
 - Override chains — attribute on a base class method is resolved correctly at all call sites
 
@@ -175,6 +175,7 @@ src/
   dotweave.Attributes/       # [Traced] and [Measured] attribute definitions
   dotweave.Generator/        # Roslyn source generator
   HelloWorld.Api/            # Demo app with built-in telemetry dashboard
+docs/                        # Astro Starlight documentation site (https://adevcorn.github.io/dotweave)
 ```
 
 ## Demo app
